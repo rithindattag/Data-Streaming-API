@@ -44,7 +44,7 @@ This project provides a Real-Time Data Streaming API service using Redpanda (a K
          - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
          - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
        environment:
-         - REDPANDA_BROKERS=redpanda:9092
+         - REDPANDA_BROKERS=redpanda:9093
      console:
        image: vectorized/console:v21.11.15
        container_name: redpanda-console
