@@ -4,21 +4,34 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 )
 
 const (
 	baseURL         = "http://localhost:8080"
-	apiKey          = "3645a8d2d3a7f6d1ebd053bffe4fb2eb"
 	concurrentUsers = 1000
 	messagesPerUser = 10
 )
 
 func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
+	// Get API key from environment variable
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		log.Fatal("API_KEY environment variable is not set")
+	}
+
 	start := time.Now()
 
 	var wg sync.WaitGroup

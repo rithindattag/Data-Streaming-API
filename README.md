@@ -173,3 +173,15 @@ docker-compose down -v
 Note: Be cautious when using the `-v` flag, as it will delete all data stored in the Redpanda volumes.
 
 ---
+
+## API Key Setup
+
+This project requires an API key for authentication. To set up your API key:
+
+1. Create a `.env` file in the project root if it doesn't exist.
+2. Add the following line to your `.env` file:
+   ```
+   API_KEY=your_actual_api_key_here
+   ```
+3. Replace `your_actual_api_key_here` with your actual API key.
+4. Ensure that `.env` is listed in your `.gitignore` file to prevent accidentally committing your API key.
