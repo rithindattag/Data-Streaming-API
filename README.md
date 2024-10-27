@@ -173,7 +173,3 @@ docker-compose down -v
 Note: Be cautious when using the `-v` flag, as it will delete all data stored in the Redpanda volumes.
 
 ---
-
-## License
-
-[Add your license information here]
