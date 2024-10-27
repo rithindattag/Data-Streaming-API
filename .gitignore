@@ -1,0 +1,23 @@
+# Ignore .env file containing sensitive information
+.env
+
+# Ignore any files with .key extension
+*.key
+
+# Ignore log files
+*.log
+
+# Ignore compiled binaries
+*.exe
+*.out
+
+# Ignore Go workspace file
+go.work
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
