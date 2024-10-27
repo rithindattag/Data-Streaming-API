@@ -2,10 +2,10 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/valyala/fasthttp"
 	"github.com/rithindattag/realtime-streaming-api/internal/api"
 	"github.com/rithindattag/realtime-streaming-api/internal/kafka"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
@@ -61,9 +61,14 @@ func main() {
 	// Initialize and start API server
 	handlers := api.NewHandlers(producer, consumer, hub, logger)
 	router := api.NewRouter(handlers)
-	
+
+	server := &fasthttp.Server{
+		Handler: router,
+		Name:    "FastHTTP",
+	}
+
 	log.Printf("Starting server on :%s", apiPort)
-	if err := http.ListenAndServe(":"+apiPort, router); err != nil {
+	if err := server.ListenAndServe(":" + apiPort); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
