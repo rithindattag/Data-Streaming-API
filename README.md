@@ -96,7 +96,7 @@ This project provides a Real-Time Data Streaming API service using Redpanda (a K
    Create a `.env` file in the project root (do not commit this file to version control):
 
    ```
-   KAFKA_BROKERS=localhost:9092
+   KAFKA_BROKERS=localhost:9093
    KAFKA_TOPIC=my-topic
    API_PORT=8000
    # Add any other sensitive configuration here
