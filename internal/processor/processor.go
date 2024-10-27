@@ -4,17 +4,27 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
 	"github.com/rithindattag/realtime-streaming-api/pkg/logger"
 )
 
+// Processor handles message processing
 type Processor struct {
 	logger *logger.Logger
 }
 
+// NewProcessor creates a new Processor instance
 func NewProcessor(logger *logger.Logger) *Processor {
 	return &Processor{
 		logger: logger,
 	}
+}
+
+// ProcessMessage processes a single message
+func (p *Processor) ProcessMessage(message []byte) []byte {
+	// TODO: Implement message processing logic
+	p.logger.Info("Processing message", "message", string(message))
+	return message // For now, just return the original message
 }
 
 func (p *Processor) ProcessData(data []byte) ([]byte, error) {

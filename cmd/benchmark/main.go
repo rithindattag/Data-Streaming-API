@@ -1,40 +1,53 @@
+// Package main provides a benchmark tool for the streaming API
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/joho/godotenv"
 	"sort"
+
+	"github.com/joho/godotenv"
+	"github.com/valyala/fasthttp"
 )
 
+// Constants for benchmark configuration
 const (
 	baseURL         = "http://localhost:8000"
 	concurrentUsers = 1000
 	messagesPerUser = 10
+	maxRetries      = 3
 )
 
+// Global variables for benchmark metrics
 var (
 	totalRequests int64
 	totalErrors   int64
 	latencies     []float64
 	latenciesMu   sync.Mutex
+	client        *fasthttp.Client
 )
 
+// init initializes the HTTP client
+func init() {
+	client = &fasthttp.Client{
+		MaxConnsPerHost: 10000,
+		ReadTimeout:     30 * time.Second,
+		WriteTimeout:    30 * time.Second,
+	}
+}
+
+// main is the entry point for the benchmark tool
 func main() {
-	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment variables")
 	}
 
-	// Get API key from environment variable
 	apiKey := os.Getenv("API_KEY")
 	if apiKey == "" {
 		log.Fatal("API_KEY environment variable is not set")
@@ -63,7 +76,6 @@ func main() {
 	fmt.Printf("Failed requests: %d\n", totalErrors)
 	fmt.Printf("Requests per second: %.2f\n", float64(successfulRequests)/elapsed.Seconds())
 
-	// Calculate latency percentiles
 	sort.Float64s(latencies)
 	len := len(latencies)
 	if len > 0 {
@@ -75,6 +87,7 @@ func main() {
 	}
 }
 
+// runUserWorkload simulates a single user's workload
 func runUserWorkload(userID int, apiKey string) {
 	streamID := createStream(apiKey)
 	if streamID == "" {
@@ -87,40 +100,61 @@ func runUserWorkload(userID int, apiKey string) {
 	}
 }
 
+// createStream creates a new stream and returns the stream ID
 func createStream(apiKey string) string {
-	req, _ := http.NewRequest("POST", baseURL+"/stream/start", nil)
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.SetRequestURI(baseURL + "/stream/start")
+	req.Header.SetMethod("POST")
 	req.Header.Set("X-API-Key", apiKey)
-	resp, err := http.DefaultClient.Do(req)
+
+	err := client.Do(req, resp)
 	if err != nil {
 		fmt.Printf("Error creating stream: %v\n", err)
 		return ""
 	}
-	defer resp.Body.Close()
 
 	var result map[string]string
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.Unmarshal(resp.Body(), &result)
 	return result["stream_id"]
 }
 
+// sendData sends data to a specific stream
 func sendData(streamID, message, apiKey string) {
-	start := time.Now()
 	data := map[string]string{"data": message}
 	jsonData, _ := json.Marshal(data)
 
-	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/stream/%s/send", baseURL, streamID), bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", apiKey)
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Printf("Error sending data: %v\n", err)
-		return
+	req.SetRequestURI(fmt.Sprintf("%s/stream/%s/send", baseURL, streamID))
+	req.Header.SetMethod("POST")
+	req.Header.SetContentType("application/json")
+	req.Header.Set("X-API-Key", apiKey)
+	req.SetBody(jsonData)
+
+	start := time.Now() // Define start here
+
+	var err error
+	var respBody []byte
+	for i := 0; i < maxRetries; i++ {
+		err = client.Do(req, resp)
+		respBody = resp.Body()
+		if err == nil && resp.StatusCode() == fasthttp.StatusAccepted {
+			break
+		}
+		time.Sleep(time.Duration(1<<uint(i)) * 100 * time.Millisecond)
 	}
-	defer resp.Body.Close()
 
 	atomic.AddInt64(&totalRequests, 1)
-	if resp.StatusCode != http.StatusAccepted {
+	if err != nil || resp.StatusCode() != fasthttp.StatusAccepted {
 		atomic.AddInt64(&totalErrors, 1)
+		fmt.Printf("Error sending data: %v, Status: %d, Body: %s\n", err, resp.StatusCode(), string(respBody))
 	}
 
 	latency := float64(time.Since(start).Milliseconds())

@@ -11,17 +11,17 @@ This report details the performance of the Real-Time Data Streaming API under hi
 ## Results
 
 ```
-Benchmark completed in [TIME]
-Total requests: [TOTAL_REQUESTS]
-Successful requests: [SUCCESSFUL_REQUESTS]
-Failed requests: [FAILED_REQUESTS]
-Requests per second: [RPS]
+Benchmark completed in 479.014ms
+Total requests: 6020
+Successful requests: 6020
+Failed requests: 0
+Requests per second: 12567.48
 
 Latency (ms):
-  50%: [LATENCY_50]
-  90%: [LATENCY_90]
-  95%: [LATENCY_95]
-  99%: [LATENCY_99]
+  50%: 35.00
+  90%: 72.00
+  95%: 103.00
+  99%: 117.00
 ```
 
 ## Analysis

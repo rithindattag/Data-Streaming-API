@@ -3,12 +3,12 @@ package api
 import (
 	"encoding/json"
 	"sync"
-	"time"
 	"golang.org/x/time/rate"
 	"github.com/google/uuid"
+	"strings"
+	"fmt"
 
 	"github.com/valyala/fasthttp"
-	"github.com/gomodule/redigo/redis"
 	"github.com/rithindattag/realtime-streaming-api/internal/kafka"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
 	"github.com/rithindattag/realtime-streaming-api/pkg/logger"
@@ -16,20 +16,8 @@ import (
 )
 
 var (
-	globalLimiter = rate.NewLimiter(rate.Limit(5000), 10000) // 5000 requests per second with burst of 10000
-	redisPool     *redis.Pool
+	globalLimiter = rate.NewLimiter(rate.Limit(50000), 100000) // 50000 requests per second with burst of 100000
 )
-
-func init() {
-	redisPool = &redis.Pool{
-		MaxIdle:     100,
-		MaxActive:   12000,
-		IdleTimeout: 240 * time.Second,
-		Dial: func() (redis.Conn, error) {
-			return redis.Dial("tcp", "localhost:6379")
-		},
-	}
-}
 
 type Handlers struct {
 	Producer      *kafka.Producer
@@ -41,16 +29,14 @@ type Handlers struct {
 }
 
 func NewHandlers(producer *kafka.Producer, consumer *kafka.Consumer, hub *websocket.Hub, logger *logger.Logger) *Handlers {
-	h := &Handlers{
+	return &Handlers{
 		Producer:      producer,
 		Consumer:      consumer,
 		Hub:           hub,
 		Logger:        logger,
-			ActiveStreams: make(map[string]bool),
+		ActiveStreams: make(map[string]bool),
 		StreamsMutex:  sync.RWMutex{},
 	}
-	go h.messageWorker()
-	return h
 }
 
 func (h *Handlers) HandleFastHTTP(ctx *fasthttp.RequestCtx) {
@@ -84,12 +70,29 @@ func (h *Handlers) StartStream(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *Handlers) SendData(ctx *fasthttp.RequestCtx) {
+	h.Logger.Info("SendData function called")
+
+	// Log the request headers and body
+	h.Logger.Info("Request headers", "headers", ctx.Request.Header.String())
+	h.Logger.Info("Request body", "body", string(ctx.PostBody()))
+
 	if !globalLimiter.Allow() {
+		h.Logger.Error("Rate limit exceeded")
 		ctx.Error("Too many requests", fasthttp.StatusTooManyRequests)
 		return
 	}
 
-	streamID := ctx.UserValue("stream_id").(string)
+	path := string(ctx.Path())
+	h.Logger.Info("Request path", "path", path)
+
+	parts := strings.Split(path, "/")
+	if len(parts) != 4 || parts[1] != "stream" || parts[3] != "send" {
+		h.Logger.Error("Invalid path", "path", path)
+		ctx.Error("Invalid path", fasthttp.StatusBadRequest)
+		return
+	}
+	streamID := parts[2]
+	h.Logger.Info("Stream ID extracted", "streamID", streamID)
 
 	if !h.streamExists(streamID) {
 		h.Logger.Error("Stream not found", "stream_id", streamID)
@@ -98,14 +101,6 @@ func (h *Handlers) SendData(ctx *fasthttp.RequestCtx) {
 	}
 
 	h.Logger.Info("Received data for stream", "stream_id", streamID)
-
-	startTime := time.Now()
-	defer func() {
-		duration := time.Since(startTime).Seconds()
-		metrics.ProcessingTime.WithLabelValues(streamID).Observe(duration)
-	}()
-
-	metrics.MessagesReceived.WithLabelValues(streamID).Inc()
 
 	var data map[string]interface{}
 	if err := json.Unmarshal(ctx.PostBody(), &data); err != nil {
@@ -121,17 +116,14 @@ func (h *Handlers) SendData(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	conn := redisPool.Get()
-	defer conn.Close()
-
-	_, err = conn.Do("LPUSH", "message_queue", string(jsonData))
-	if err != nil {
-		h.Logger.Error("Failed to push message to Redis", "error", err)
-		ctx.Error("Failed to process data", fasthttp.StatusInternalServerError)
+	// Log before sending to Kafka
+	h.Logger.Info("Attempting to send message to Kafka", "stream_id", streamID)
+	if err := h.Producer.SendMessage(streamID, jsonData); err != nil {
+		h.Logger.Error("Failed to send message to Kafka", "error", err, "stream_id", streamID)
+		ctx.Error(fmt.Sprintf("Failed to process data: %v", err), fasthttp.StatusInternalServerError)
 		return
 	}
-
-	metrics.MessagesSent.WithLabelValues(streamID).Inc()
+	h.Logger.Info("Successfully sent message to Kafka", "stream_id", streamID)
 
 	h.Logger.Info("Data sent to stream", "stream_id", streamID)
 	ctx.SetStatusCode(fasthttp.StatusAccepted)
@@ -146,24 +138,4 @@ func (h *Handlers) streamExists(streamID string) bool {
 	h.StreamsMutex.RLock()
 	defer h.StreamsMutex.RUnlock()
 	return h.ActiveStreams[streamID]
-}
-
-func (h *Handlers) messageWorker() {
-	for {
-		conn := redisPool.Get()
-		reply, err := redis.Bytes(conn.Do("RPOP", "message_queue"))
-		conn.Close()
-
-		if err == redis.ErrNil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		if err != nil {
-			h.Logger.Error("Failed to pop message from Redis", "error", err)
-			continue
-		}
-
-		h.Producer.SendMessage("topic", reply)
-	}
 }

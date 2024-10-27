@@ -1,3 +1,4 @@
+// Package metrics provides Prometheus metrics for the streaming API
 package metrics
 
 import (
@@ -6,18 +7,28 @@ import (
 )
 
 var (
+	// StreamsCreated tracks the number of streams created
 	StreamsCreated = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "streams_created_total",
 		Help: "The total number of streams created",
 	})
 
-	MessagesProcessed = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "messages_processed_total",
-		Help: "The total number of messages processed",
-	})
+	// MessagesReceived tracks the number of messages received per stream
+	MessagesReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "messages_received_total",
+		Help: "The total number of messages received per stream",
+	}, []string{"stream_id"})
 
-	ActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "active_connections",
-		Help: "The number of active WebSocket connections",
-	})
+	// MessagesSent tracks the number of messages sent per stream
+	MessagesSent = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "messages_sent_total",
+		Help: "The total number of messages sent per stream",
+	}, []string{"stream_id"})
+
+	// ProcessingTime tracks the processing time for messages
+	ProcessingTime = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "message_processing_time_seconds",
+		Help:    "The time taken to process a message",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"stream_id"})
 )

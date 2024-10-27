@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"os"
 	"strings"
 )

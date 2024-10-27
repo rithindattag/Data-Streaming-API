@@ -1,74 +1,97 @@
+// Package main is the entry point for the streaming API server
 package main
 
 import (
-	"log"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/valyala/fasthttp"
 	"github.com/rithindattag/realtime-streaming-api/internal/api"
 	"github.com/rithindattag/realtime-streaming-api/internal/kafka"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
 	"github.com/rithindattag/realtime-streaming-api/pkg/logger"
+	"github.com/valyala/fasthttp"
+	"golang.org/x/sys/unix"
 )
 
+// main is the entry point for the API server
 func main() {
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using system environment variables")
+		logger.NewLogger().Info("No .env file found, using system environment variables")
 	}
 
 	// Get environment variables
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
-	if kafkaBrokers == "" {
-		log.Fatal("KAFKA_BROKERS environment variable is not set")
-	}
-
 	kafkaTopic := os.Getenv("KAFKA_TOPIC")
-	if kafkaTopic == "" {
-		log.Fatal("KAFKA_TOPIC environment variable is not set")
-	}
 
 	apiPort := os.Getenv("API_PORT")
 	if apiPort == "" {
 		apiPort = "8000" // Default port if not set
 	}
 
+	// Increase the maximum number of open files
+	var rLimit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &rLimit); err != nil {
+		logger.NewLogger().Error("Error getting rlimit", "error", err)
+		os.Exit(1)
+	}
+	rLimit.Cur = rLimit.Max
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &rLimit); err != nil {
+		logger.NewLogger().Error("Error setting rlimit", "error", err)
+		os.Exit(1)
+	}
+
+	// Set the maximum number of CPUs that can be executing simultaneously
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	// Initialize logger
-	logger := logger.NewLogger()
+	log := logger.NewLogger()
 
 	// Initialize Kafka producer
 	producer, err := kafka.NewProducer(kafkaBrokers)
 	if err != nil {
-		log.Fatalf("Failed to create Kafka producer: %v", err)
+		log.Error("Failed to create Kafka producer", "error", err)
+		os.Exit(1)
 	}
 	defer producer.Close()
 
+	log.Info("Kafka configuration", "brokers", kafkaBrokers, "topic", kafkaTopic)
+
 	// Initialize Kafka consumer
-	consumer, err := kafka.NewConsumer(kafkaBrokers, kafkaTopic, logger)
+	consumer, err := kafka.NewConsumer(kafkaBrokers, kafkaTopic, log)
 	if err != nil {
-		log.Fatalf("Failed to create Kafka consumer: %v", err)
+		log.Error("Failed to create Kafka consumer", "error", err)
+		os.Exit(1)
 	}
 	defer consumer.Close()
 
 	// Initialize WebSocket hub
-	hub := websocket.NewHub(logger)
+	hub := websocket.NewHub(log)
 	go hub.Run()
 
 	// Start consuming messages and broadcasting to WebSocket clients
 	go consumer.ConsumeMessages(hub)
 
 	// Initialize and start API server
-	handlers := api.NewHandlers(producer, consumer, hub, logger)
+	handlers := api.NewHandlers(producer, consumer, hub, log)
 	router := api.NewRouter(handlers)
 
 	server := &fasthttp.Server{
-		Handler: router,
-		Name:    "FastHTTP",
+		Handler:            router,
+		Name:               "FastHTTP",
+		Concurrency:        1000000,
+		MaxConnsPerIP:      1000,
+		MaxRequestsPerConn: 10000,
+		WriteTimeout:       30 * time.Second,
+		ReadTimeout:        30 * time.Second,
+		IdleTimeout:        60 * time.Second,
 	}
 
-	log.Printf("Starting server on :%s", apiPort)
+	log.Info("Starting server", "port", apiPort, "kafkaBrokers", kafkaBrokers, "kafkaTopic", kafkaTopic)
 	if err := server.ListenAndServe(":" + apiPort); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+		log.Error("Server failed to start", "error", err)
+		os.Exit(1)
 	}
 }

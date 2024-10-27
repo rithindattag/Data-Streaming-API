@@ -1,0 +1,31 @@
+# Docker Compose file for setting up the streaming API environment
+version: "3.7"
+
+services:
+  # Redpanda service configuration
+  redpanda:
+    image: docker.redpanda.com/vectorized/redpanda:v22.3.11
+    container_name: redpanda
+    ports:
+      - "9093:9092" # Kafka API port
+      - "9645:9644" # Redpanda admin port
+    command:
+      - redpanda start
+      - --smp 1 # Number of cores
+      - --overprovisioned # Optimize for containerized environment
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    environment:
+      - REDPANDA_BROKERS=redpanda:9092
+
+  # Redpanda Console service configuration
+  console:
+    image: docker.redpanda.com/vectorized/console:v2.2.3
+    container_name: redpanda-console
+    ports:
+      - "8080:8080" # Web UI port
+    environment:
+      - KAFKA_BROKERS=redpanda:29092
+    depends_on:
+      - redpanda

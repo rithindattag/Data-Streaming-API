@@ -1,48 +1,38 @@
 package ratelimit
 
 import (
-	"net/http"
 	"sync"
 
 	"golang.org/x/time/rate"
 )
 
+// RateLimiter manages rate limiting for multiple clients
 type RateLimiter struct {
-	ips map[string]*rate.Limiter
-	mu  *sync.RWMutex
-	r   rate.Limit
-	b   int
+	limiters map[string]*rate.Limiter
+	mu       sync.Mutex
+	r        rate.Limit
+	b        int
 }
 
+// NewRateLimiter creates a new RateLimiter instance
 func NewRateLimiter(r rate.Limit, b int) *RateLimiter {
 	return &RateLimiter{
-		ips: make(map[string]*rate.Limiter),
-		mu:  &sync.RWMutex{},
-		r:   r,
-		b:   b,
+		limiters: make(map[string]*rate.Limiter),
+		r:        r,
+		b:        b,
 	}
 }
 
-func (rl *RateLimiter) GetLimiter(ip string) *rate.Limiter {
+// GetLimiter returns a rate limiter for a given key
+func (rl *RateLimiter) GetLimiter(key string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	limiter, exists := rl.ips[ip]
+	limiter, exists := rl.limiters[key]
 	if !exists {
 		limiter = rate.NewLimiter(rl.r, rl.b)
-		rl.ips[ip] = limiter
+		rl.limiters[key] = limiter
 	}
 
 	return limiter
-}
-
-func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		limiter := rl.GetLimiter(r.RemoteAddr)
-		if !limiter.Allow() {
-			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	}
 }

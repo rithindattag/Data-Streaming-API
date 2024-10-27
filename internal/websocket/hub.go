@@ -21,16 +21,18 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
+// Hub maintains the set of active clients and broadcasts messages to them
 type Hub struct {
 	clients    map[*Client]bool
-	Broadcast  chan Message
-	Register   chan *Client
-	Unregister chan *Client
+	broadcast  chan Message
+	register   chan *Client
+	unregister chan *Client
 	streams    map[string][]*Client
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	logger     *logger.Logger
 }
 
+// Client represents a WebSocket client
 type Client struct {
 	Hub      *Hub
 	StreamID string
@@ -38,59 +40,77 @@ type Client struct {
 	Send     chan []byte
 }
 
+// Message represents a message to be broadcasted
 type Message struct {
 	StreamID string
 	Data     []byte
 }
 
+// NewHub creates a new Hub instance
 func NewHub(logger *logger.Logger) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		Broadcast:  make(chan Message),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
+		broadcast:  make(chan Message),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
 		streams:    make(map[string][]*Client),
 		logger:     logger,
 	}
 }
 
+// Run starts the Hub's main loop
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.Register:
-			h.mu.Lock()
-			h.clients[client] = true
-			h.streams[client.StreamID] = append(h.streams[client.StreamID], client)
-			h.mu.Unlock()
-			h.logger.Info("Client registered", "streamID", client.StreamID)
-		case client := <-h.Unregister:
-			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				close(client.Send)
-				h.removeClientFromStream(client)
-				h.logger.Info("Client unregistered", "streamID", client.StreamID)
-			}
-			h.mu.Unlock()
-		case message := <-h.Broadcast:
-			// Assuming message is now a struct with StreamID and Data fields
-			h.mu.Lock()
-			for _, client := range h.streams[message.StreamID] {
-				select {
-				case client.Send <- message.Data:
-				default:
-					close(client.Send)
-					delete(h.clients, client)
-					h.removeClientFromStream(client)
-					h.logger.Info("Client removed due to blocked channel", "streamID", client.StreamID)
-				}
-			}
-			h.mu.Unlock()
-			h.logger.Info("Broadcasting message", "streamID", message.StreamID)
+		case client := <-h.register:
+			h.registerClient(client)
+		case client := <-h.unregister:
+			h.unregisterClient(client)
+		case message := <-h.broadcast:
+			h.broadcastMessage(message)
 		}
 	}
 }
 
+// registerClient adds a new client to the hub
+func (h *Hub) registerClient(client *Client) {
+	h.mu.Lock()
+	h.clients[client] = true
+	h.streams[client.StreamID] = append(h.streams[client.StreamID], client)
+	h.mu.Unlock()
+	h.logger.Info("Client registered", "streamID", client.StreamID)
+}
+
+// unregisterClient removes a client from the hub
+func (h *Hub) unregisterClient(client *Client) {
+	h.mu.Lock()
+	if _, ok := h.clients[client]; ok {
+		delete(h.clients, client)
+		close(client.Send)
+		h.removeClientFromStream(client)
+		h.logger.Info("Client unregistered", "streamID", client.StreamID)
+	}
+	h.mu.Unlock()
+}
+
+// broadcastMessage sends a message to all clients in a specific stream
+func (h *Hub) broadcastMessage(message Message) {
+	h.mu.RLock()
+	for _, client := range h.streams[message.StreamID] {
+		select {
+		case client.Send <- message.Data:
+		default:
+			close(client.Send)
+			delete(h.clients, client)
+			h.removeClientFromStream(client)
+			h.logger.Info("Client removed due to blocked channel", "streamID", client.StreamID)
+		}
+	}
+	h.mu.RUnlock()
+	h.logger.Info("Broadcasting message", "streamID", message.StreamID)
+}
+
+// removeClientFromStream removes a client from a specific stream
 func (h *Hub) removeClientFromStream(client *Client) {
 	clients := h.streams[client.StreamID]
 	for i, c := range clients {
@@ -104,6 +124,7 @@ func (h *Hub) removeClientFromStream(client *Client) {
 	}
 }
 
+// CreateStream creates a new stream
 func (h *Hub) CreateStream(streamID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -112,9 +133,14 @@ func (h *Hub) CreateStream(streamID string) {
 	}
 }
 
+// BroadcastMessage broadcasts a message to all clients
+func (h *Hub) BroadcastMessage(message Message) {
+	h.broadcast <- message
+}
+
 func (c *Client) ReadPump() {
 	defer func() {
-		c.Hub.Unregister <- c
+		c.Hub.unregister <- c
 		c.Conn.Close()
 	}()
 	c.Conn.SetReadLimit(maxMessageSize)
@@ -124,11 +150,10 @@ func (c *Client) ReadPump() {
 		_, _, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				// log.Printf("error: %v", err)
+				c.Hub.logger.Error("Unexpected close error", "error", err)
 			}
 			break
 		}
-		// Process the message if needed
 	}
 }
 
@@ -143,7 +168,6 @@ func (c *Client) WritePump() {
 		case message, ok := <-c.Send:
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The hub closed the channel.
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
