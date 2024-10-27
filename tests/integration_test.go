@@ -10,6 +10,7 @@ import (
 	"context"
 	"time"
 	"io/ioutil"
+	"os"
 
 	"github.com/gorilla/mux"
 	gorillaWS "github.com/gorilla/websocket"
@@ -37,12 +38,23 @@ func setupTestServer() *httptest.Server {
 	return httptest.NewServer(r)
 }
 
+func TestIntegration(t *testing.T) {
+	// Get API key from environment variable
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		t.Fatal("API_KEY environment variable is not set")
+	}
+
+	// Use apiKey in your tests
+	// ...
+}
+
 func TestStreamCreation(t *testing.T) {
 	server := setupTestServer()
 	defer server.Close()
 
 	req, _ := http.NewRequest("POST", server.URL+"/stream/start", nil)
-	req.Header.Set("X-API-Key", "3645a8d2d3a7f6d1ebd053bffe4fb2eb")
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -69,7 +81,7 @@ func TestDataSending(t *testing.T) {
 
 	// First, create a stream
 	req, _ := http.NewRequestWithContext(ctx, "POST", server.URL+"/stream/start", nil)
-	req.Header.Set("X-API-Key", "3645a8d2d3a7f6d1ebd053bffe4fb2eb")
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 	var result map[string]string
@@ -84,7 +96,7 @@ func TestDataSending(t *testing.T) {
 	
 	// Send the JSON data directly without base64 encoding
 	req, _ = http.NewRequestWithContext(ctx, "POST", server.URL+"/stream/"+streamID+"/send", bytes.NewBuffer(jsonData))
-	req.Header.Set("X-API-Key", "3645a8d2d3a7f6d1ebd053bffe4fb2eb")
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)
 	assert.NoError(t, err)
@@ -113,7 +125,7 @@ func TestResultStreaming(t *testing.T) {
 
 	// Create a stream
 	req, _ := http.NewRequest("POST", server.URL+"/stream/start", nil)
-	req.Header.Set("X-API-Key", "3645a8d2d3a7f6d1ebd053bffe4fb2eb")
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	resp, err := http.DefaultClient.Do(req)
 	assert.NoError(t, err)
 	var result map[string]string
@@ -148,7 +160,7 @@ func TestResultStreaming(t *testing.T) {
 	assert.NoError(t, err)
 	
 	req, _ = http.NewRequest("POST", server.URL+"/stream/"+streamID+"/send", bytes.NewBuffer(jsonData))
-	req.Header.Set("X-API-Key", "3645a8d2d3a7f6d1ebd053bffe4fb2eb")
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	req.Header.Set("Content-Type", "application/json")
 	_, err = http.DefaultClient.Do(req)
 	assert.NoError(t, err)
