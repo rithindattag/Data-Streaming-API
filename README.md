@@ -185,3 +185,7 @@ This project requires an API key for authentication. To set up your API key:
    ```
 3. Replace `your_actual_api_key_here` with your actual API key.
 4. Ensure that `.env` is listed in your `.gitignore` file to prevent accidentally committing your API key.
+
+## Performance Report
+
+For detailed information about the system's performance under high load, please refer to the [Performance Benchmarking Report](PERFORMANCE_REPORT.md).

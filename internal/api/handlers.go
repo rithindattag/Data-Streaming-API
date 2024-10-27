@@ -3,16 +3,51 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"fmt"
 	"sync"
 	"time"
+	"golang.org/x/time/rate"
+	"github.com/google/uuid"
 
 	"github.com/gorilla/mux"
 	"github.com/rithindattag/realtime-streaming-api/internal/kafka"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
 	"github.com/rithindattag/realtime-streaming-api/pkg/logger"
 	"github.com/rithindattag/realtime-streaming-api/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var (
+	limiter = rate.NewLimiter(rate.Limit(100), 200) // 100 requests per second with burst of 200
+	clients = make(map[string]*rate.Limiter)
+	mu      sync.Mutex
+)
+
+func getClientLimiter(clientIP string) *rate.Limiter {
+	mu.Lock()
+	defer mu.Unlock()
+
+	limiter, exists := clients[clientIP]
+	if !exists {
+		limiter = rate.NewLimiter(rate.Limit(10), 20) // 10 requests per second with burst of 20
+		clients[clientIP] = limiter
+	}
+
+	return limiter
+}
+
+func RateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+
+		if !getClientLimiter(clientIP).Allow() {
+			respondWithError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
 
 type Handlers struct {
 	Producer      *kafka.Producer
@@ -60,7 +95,7 @@ func (h *Handlers) SendData(w http.ResponseWriter, r *http.Request) {
 
 	if !h.streamExists(streamID) {
 		h.Logger.Error("Stream not found", "stream_id", streamID)
-		http.Error(w, "Stream not found", http.StatusNotFound)
+		respondWithError(w, http.StatusNotFound, "Stream not found")
 		return
 	}
 
@@ -95,7 +130,7 @@ func (h *Handlers) SendData(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Info("Attempting to send message to Kafka", "stream_id", streamID)
 	if err := h.Producer.SendMessage(streamID, jsonData); err != nil {
 		h.Logger.Error("Failed to send message to Kafka", "error", err, "stream_id", streamID)
-		http.Error(w, "Failed to process data", http.StatusInternalServerError)
+		respondWithError(w, http.StatusInternalServerError, "Failed to process data")
 		return
 	}
 	h.Logger.Info("Message sent to Kafka", "stream_id", streamID)
@@ -103,8 +138,7 @@ func (h *Handlers) SendData(w http.ResponseWriter, r *http.Request) {
 	metrics.MessagesSent.WithLabelValues(streamID).Inc()
 
 	h.Logger.Info("Data sent to stream", "stream_id", streamID)
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+	respondWithJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func (h *Handlers) StreamResults(w http.ResponseWriter, r *http.Request) {
@@ -134,13 +168,53 @@ func (h *Handlers) StreamResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func generateUniqueID() string {
-	// Implement a function to generate a unique ID (e.g., UUID)
-	// For simplicity, we'll use a placeholder implementation
-	return "stream-123"
+	return uuid.New().String()
 }
 
 func (h *Handlers) streamExists(streamID string) bool {
 	h.StreamsMutex.RLock()
 	defer h.StreamsMutex.RUnlock()
 	return h.ActiveStreams[streamID]
+}
+
+var (
+	requestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"method", "endpoint"},
+	)
+
+	requestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "Duration of HTTP requests",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "endpoint"},
+	)
+)
+
+func MetricsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		duration := time.Since(start)
+
+		requestsTotal.WithLabelValues(r.Method, r.URL.Path).Inc()
+		requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
+	}
+}
+
+// Add this function at the beginning of the file
+func respondWithError(w http.ResponseWriter, code int, message string) {
+	respondWithJSON(w, code, map[string]string{"error": message})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	response, _ := json.Marshal(payload)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(response)
 }

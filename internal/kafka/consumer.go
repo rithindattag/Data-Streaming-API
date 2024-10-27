@@ -1,10 +1,10 @@
 package kafka
 
 import (
-	"context"
-	"time"
-
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	// Remove or comment out the following lines if they're not used elsewhere in the file
+	// "context"
+	// "time"
 	"github.com/rithindattag/realtime-streaming-api/internal/processor"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
 	"github.com/rithindattag/realtime-streaming-api/pkg/logger"

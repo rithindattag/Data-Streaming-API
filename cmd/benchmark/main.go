@@ -8,16 +8,24 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+	"sort"
 )
 
 const (
-	baseURL         = "http://localhost:8080"
+	baseURL         = "http://localhost:8000"
 	concurrentUsers = 1000
 	messagesPerUser = 10
+)
+
+var (
+	totalRequests int64
+	totalErrors   int64
+	latencies     []float64
+	latenciesMu   sync.Mutex
 )
 
 func main() {
@@ -40,32 +48,49 @@ func main() {
 	for i := 0; i < concurrentUsers; i++ {
 		go func(userID int) {
 			defer wg.Done()
-			runUserWorkload(userID)
+			runUserWorkload(userID, apiKey)
 		}(i)
 	}
 
 	wg.Wait()
 
 	elapsed := time.Since(start)
+	successfulRequests := totalRequests - totalErrors
+
 	fmt.Printf("Benchmark completed in %s\n", elapsed)
-	fmt.Printf("Total messages sent: %d\n", concurrentUsers*messagesPerUser)
-	fmt.Printf("Messages per second: %.2f\n", float64(concurrentUsers*messagesPerUser)/elapsed.Seconds())
+	fmt.Printf("Total requests: %d\n", totalRequests)
+	fmt.Printf("Successful requests: %d\n", successfulRequests)
+	fmt.Printf("Failed requests: %d\n", totalErrors)
+	fmt.Printf("Requests per second: %.2f\n", float64(successfulRequests)/elapsed.Seconds())
+
+	// Calculate latency percentiles
+	sort.Float64s(latencies)
+	len := len(latencies)
+	if len > 0 {
+		fmt.Printf("Latency (ms):\n")
+		fmt.Printf("  50%%: %.2f\n", latencies[len*50/100])
+		fmt.Printf("  90%%: %.2f\n", latencies[len*90/100])
+		fmt.Printf("  95%%: %.2f\n", latencies[len*95/100])
+		fmt.Printf("  99%%: %.2f\n", latencies[len*99/100])
+	}
 }
 
-func runUserWorkload(userID int) {
-	streamID := createStream()
+func runUserWorkload(userID int, apiKey string) {
+	streamID := createStream(apiKey)
 	if streamID == "" {
 		fmt.Printf("Failed to create stream for user %d\n", userID)
 		return
 	}
 
 	for i := 0; i < messagesPerUser; i++ {
-		sendData(streamID, fmt.Sprintf("Message %d from user %d", i, userID))
+		sendData(streamID, fmt.Sprintf("Message %d from user %d", i, userID), apiKey)
 	}
 }
 
-func createStream() string {
-	resp, err := http.Post(baseURL+"/stream/start", "application/json", nil)
+func createStream(apiKey string) string {
+	req, _ := http.NewRequest("POST", baseURL+"/stream/start", nil)
+	req.Header.Set("X-API-Key", apiKey)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Printf("Error creating stream: %v\n", err)
 		return ""
@@ -77,7 +102,8 @@ func createStream() string {
 	return result["stream_id"]
 }
 
-func sendData(streamID, message string) {
+func sendData(streamID, message, apiKey string) {
+	start := time.Now()
 	data := map[string]string{"data": message}
 	jsonData, _ := json.Marshal(data)
 
@@ -85,15 +111,20 @@ func sendData(streamID, message string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", apiKey)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Printf("Error sending data: %v\n", err)
 		return
 	}
 	defer resp.Body.Close()
 
+	atomic.AddInt64(&totalRequests, 1)
 	if resp.StatusCode != http.StatusAccepted {
-		fmt.Printf("Unexpected status code: %d\n", resp.StatusCode)
+		atomic.AddInt64(&totalErrors, 1)
 	}
+
+	latency := float64(time.Since(start).Milliseconds())
+	latenciesMu.Lock()
+	latencies = append(latencies, latency)
+	latenciesMu.Unlock()
 }

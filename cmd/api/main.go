@@ -2,12 +2,14 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/joho/godotenv"
 	"github.com/rithindattag/realtime-streaming-api/internal/api"
 	"github.com/rithindattag/realtime-streaming-api/internal/kafka"
 	"github.com/rithindattag/realtime-streaming-api/internal/websocket"
+	"github.com/rithindattag/realtime-streaming-api/pkg/logger"
 )
 
 func main() {
@@ -32,6 +34,9 @@ func main() {
 		apiPort = "8000" // Default port if not set
 	}
 
+	// Initialize logger
+	logger := logger.NewLogger()
+
 	// Initialize Kafka producer
 	producer, err := kafka.NewProducer(kafkaBrokers)
 	if err != nil {
@@ -40,27 +45,25 @@ func main() {
 	defer producer.Close()
 
 	// Initialize Kafka consumer
-	consumer, err := kafka.NewConsumer(kafkaBrokers, kafkaTopic)
+	consumer, err := kafka.NewConsumer(kafkaBrokers, kafkaTopic, logger)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka consumer: %v", err)
 	}
 	defer consumer.Close()
 
 	// Initialize WebSocket hub
-	hub := websocket.NewHub()
+	hub := websocket.NewHub(logger)
 	go hub.Run()
 
 	// Start consuming messages and broadcasting to WebSocket clients
-	go func() {
-		for message := range consumer.Messages() {
-			hub.Broadcast(message)
-		}
-	}()
+	go consumer.ConsumeMessages(hub)
 
 	// Initialize and start API server
-	server := api.NewServer(producer, hub, kafkaTopic)
+	handlers := api.NewHandlers(producer, consumer, hub, logger)
+	router := api.NewRouter(handlers)
+	
 	log.Printf("Starting server on :%s", apiPort)
-	if err := server.Start(":" + apiPort); err != nil {
+	if err := http.ListenAndServe(":"+apiPort, router); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }

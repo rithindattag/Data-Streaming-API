@@ -73,6 +73,7 @@ func (h *Hub) Run() {
 			}
 			h.mu.Unlock()
 		case message := <-h.Broadcast:
+			// Assuming message is now a struct with StreamID and Data fields
 			h.mu.Lock()
 			for _, client := range h.streams[message.StreamID] {
 				select {
